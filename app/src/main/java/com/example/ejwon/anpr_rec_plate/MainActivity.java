@@ -7,6 +7,7 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
+import android.graphics.PixelFormat;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -38,9 +39,17 @@ import android.widget.Chronometer;
 import android.widget.ImageButton;
 import android.widget.Toast;
 
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.MatOfRect;
+import org.opencv.imgproc.Imgproc;
+import org.opencv.objdetect.CascadeClassifier;
+
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -51,6 +60,21 @@ import java.util.Date;
 import java.util.List;
 
 public class MainActivity extends Activity {
+
+
+    //Image Processing variable
+    private Mat mRgba;
+    private Mat mGray;
+    private File mCascadeFile;
+    private CascadeClassifier mJavaDetector;
+    MatOfRect plates;
+    private float mRelativePlateSize = 0.2f;
+    private int mAbsolutePlateSize = 0;
+
+//    private GPSManager gpsManager = null;
+    private double speed = 0.0;
+    private double latitude = 0.0;
+    private double longitude = 0.0;
 
     private static final int REQUEST_CAMERA_PERMISSION_RESULT = 0;
     private static final int REQUEST_WRITE_EXTERNAL_STORAGE_PERMISSION_RESULT = 1;
@@ -323,6 +347,36 @@ public class MainActivity extends Activity {
         }
     }
 
+
+    private void processImage(byte[] data, int width, int height){
+
+        mRgba = new Mat(height, width, CvType.CV_8UC4);
+        mGray = new Mat(height, width, CvType.CV_8UC1);
+
+        Mat mYuv = new Mat(height + height / 2, width, CvType.CV_8UC1);
+        mYuv.put(0, 0, data);
+
+        Imgproc.cvtColor(mYuv, mGray, Imgproc.COLOR_YUV420sp2GRAY);
+        Imgproc.cvtColor(mYuv, mRgba, Imgproc.COLOR_YUV2RGB_NV21, 3);
+
+        if (mAbsolutePlateSize == 0) {
+            int heightGray = mGray.rows();
+            if (Math.round(heightGray * mRelativePlateSize) > 0) {
+                mAbsolutePlateSize = Math.round(heightGray
+                        * mRelativePlateSize);
+            }
+        }
+
+        plates = new MatOfRect();
+
+        if (mJavaDetector != null)
+            mJavaDetector.detectMultiScale(mGray, plates, 1.1, 2, 2,
+                    new org.opencv.core.Size(mAbsolutePlateSize, mAbsolutePlateSize),new org.opencv.core.Size());
+        // Display display = getWindowManager().getDefaultDisplay();
+
+//        postInvalidate();
+    }
+
     private void setupCamera(int width, int height) {
         CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         try {
@@ -413,6 +467,8 @@ public class MainActivity extends Activity {
             e.printStackTrace();
         }
     }
+
+
     private void startPreview() {
         SurfaceTexture surfaceTexture = mTextureView.getSurfaceTexture();
         surfaceTexture.setDefaultBufferSize(mPreviewSize.getWidth(), mPreviewSize.getHeight());
@@ -430,6 +486,15 @@ public class MainActivity extends Activity {
                             try {
                                 mPreviewCaptureSession.setRepeatingRequest(mCaptureRequestBuilder.build(),
                                         null, mBackgroundHandler);
+
+                                Image image = mImageReader.acquireNextImage();
+                                ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+                                byte[] bytes = new byte[buffer.capacity()];
+                                buffer.get(bytes);
+                                processImage(bytes,mPreviewSize.getWidth(), mPreviewSize.getHeight());
+
+
+
                             } catch (CameraAccessException e) {
                                 e.printStackTrace();
                             }

@@ -1,13 +1,13 @@
 package com.example.ejwon.anpr_rec_plate;
 
-import com.example.ejwon.anpr_rec_plate.R;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.ImageFormat;
-import android.graphics.PixelFormat;
+import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -22,13 +22,13 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaRecorder;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.support.v4.content.ContextCompat;
-import android.support.v7.app.AppCompatActivity;
-import android.os.Bundle;
+import android.util.Log;
 import android.util.LruCache;
 import android.util.Size;
 import android.util.SparseIntArray;
@@ -39,17 +39,21 @@ import android.widget.Chronometer;
 import android.widget.ImageButton;
 import android.widget.Toast;
 
+import com.google.zxing.Result;
+
+import org.opencv.android.BaseLoaderCallback;
+import org.opencv.android.LoaderCallbackInterface;
+import org.opencv.android.OpenCVLoader;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfRect;
 import org.opencv.imgproc.Imgproc;
 import org.opencv.objdetect.CascadeClassifier;
 
-
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -171,9 +175,17 @@ public class MainActivity extends Activity {
 
         @Override
         public void run() {
+            Result rawResult = null;
             ByteBuffer byteBuffer = mImage.getPlanes()[0].getBuffer();
             byte[] bytes = new byte[byteBuffer.remaining()];
             byteBuffer.get(bytes);
+
+            int width = mImage.getWidth();
+            int height = mImage.getHeight();
+            //PlanarYUVLuminanceSource source = new PlanarYUVLuminanceSource(bytes, width, height);
+
+            processImage(bytes,mPreviewSize.getWidth(), mPreviewSize.getHeight());
+
 
             FileOutputStream fileOutputStream = null;
             try {
@@ -292,6 +304,13 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
 
+        if (!OpenCVLoader.initDebug()) {
+            Log.d("OpenCV", "Internal OpenCV library not found. Using OpenCV Manager for initialization");
+            OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION_3_0_0, this, mLoaderCallback);
+        } else {
+            Log.d("OpenCV", "OpenCV library found inside package. Using it!");
+            mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
+        }
         startBackgroundThread();
 
         if(mTextureView.isAvailable()) {
@@ -346,7 +365,64 @@ public class MainActivity extends Activity {
                     | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
         }
     }
+    private BaseLoaderCallback mLoaderCallback = new BaseLoaderCallback(this) {
+        @Override
+        public void onManagerConnected(int status) {
+            switch (status) {
+                case LoaderCallbackInterface.SUCCESS:
+                {
+                    Log.i("OpenCV", "OpenCV loaded successfully");
+                    mRgba=new Mat();
 
+                    try{
+                    InputStream is = getResources().openRawResource(
+                               R.raw.cascade);
+                        File cascadeDir = getDir("cascade", Context.MODE_PRIVATE);
+                        mCascadeFile = new File(cascadeDir, "cascade.xml");
+                        FileOutputStream os = new FileOutputStream(mCascadeFile);
+
+                        byte[] buffer = new byte[4096];
+                        int bytesRead;
+                        while ((bytesRead = is.read(buffer)) != -1) {
+                            os.write(buffer, 0, bytesRead);
+                        }
+                        is.close();
+                        os.close();
+
+                        mJavaDetector = new CascadeClassifier(
+                                mCascadeFile.getAbsolutePath());
+                        mJavaDetector.load(mCascadeFile.getAbsolutePath());
+
+                        if (mJavaDetector.empty()) {
+                            Log.e(TAG, "Failed to load cascade classifier");
+                            mJavaDetector = null;
+                        } else
+                            Log.i(TAG, "Loaded cascade classifier from "
+                                    + mCascadeFile.getAbsolutePath());
+
+                       // cascadeDir.delete();
+
+                    }catch (IOException e) {
+                        e.printStackTrace();
+                        Log.e(TAG, "Failed to load cascade. Exception thrown: " + e);
+                    }
+
+                } break;
+                case LoaderCallbackInterface.INIT_FAILED:
+                {
+
+                }
+                default:
+                {
+                    super.onManagerConnected(status);
+                } break;
+            }
+        }
+    };
+
+    public void load_cascade() {
+
+    }
 
     private void processImage(byte[] data, int width, int height){
 
@@ -374,7 +450,17 @@ public class MainActivity extends Activity {
                     new org.opencv.core.Size(mAbsolutePlateSize, mAbsolutePlateSize),new org.opencv.core.Size());
         // Display display = getWindowManager().getDefaultDisplay();
 
-//        postInvalidate();
+        //postInvalidate();
+    }
+
+    public void Draw(){
+        Paint paint = new Paint();
+        paint.setColor(Color.GREEN);
+        paint.setTextSize(20);
+        if(plates != null)
+        {
+
+        }
     }
 
     private void setupCamera(int width, int height) {
@@ -468,6 +554,9 @@ public class MainActivity extends Activity {
         }
     }
 
+    private ImageReader mImgReader;
+    private static final String TAG = "MyActivity";
+    private Handler mHandler;
 
     private void startPreview() {
         SurfaceTexture surfaceTexture = mTextureView.getSurfaceTexture();
@@ -486,15 +575,6 @@ public class MainActivity extends Activity {
                             try {
                                 mPreviewCaptureSession.setRepeatingRequest(mCaptureRequestBuilder.build(),
                                         null, mBackgroundHandler);
-
-                                Image image = mImageReader.acquireNextImage();
-                                ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-                                byte[] bytes = new byte[buffer.capacity()];
-                                buffer.get(bytes);
-                                processImage(bytes,mPreviewSize.getWidth(), mPreviewSize.getHeight());
-
-
-
                             } catch (CameraAccessException e) {
                                 e.printStackTrace();
                             }
@@ -511,6 +591,41 @@ public class MainActivity extends Activity {
             e.printStackTrace();
         }
     }
+
+
+//    public void onImageAvailable(ImageReader reader) {
+//        Log.i(TAG, "in OnImageAvailable");
+//
+//        Image img = null;
+//        try {
+//            img = reader.acquireLatestImage();
+//            if (img != null) {
+//                Image.Plane[] planes = img.getPlanes();
+//                if (planes[0].getBuffer() == null) {
+//                    return;
+//                }
+//                int width = img.getWidth();
+//                int height = img.getHeight();
+//                int pixelStride = planes[0].getPixelStride();
+//                int rowStride = planes[0].getRowStride();
+//                int rowPadding = rowStride - pixelStride * width;
+//                byte[] newData = new byte[width * height * 4];
+//
+//                ByteBuffer buffer = img.getPlanes()[0].getBuffer();
+//                byte[] bytes = new byte[buffer.capacity()];
+//                buffer.get(bytes);
+//                processImage(bytes,mPreviewSize.getWidth(), mPreviewSize.getHeight());
+//
+//            }
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//        } finally {
+//            if (null != img) {
+//                img.close();
+//            }
+//        }
+//    }
+
 
     private void startStillCaptureRequest() {
         try {
@@ -604,8 +719,9 @@ public class MainActivity extends Activity {
     }
 
     private void createImageFolder() {
+
         File imageFile = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
-        mImageFolder = new File(imageFile, "camera2VideoImage");
+        mImageFolder = new File(imageFile, "ANPR_pictures");
         if(!mImageFolder.exists()) {
             mImageFolder.mkdirs();
         }
